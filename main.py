@@ -3,38 +3,23 @@ import numpy as np
 import time
 import os
 
-# ==========================================
-#               CONFIGURATION
-# ==========================================
 CONFIG = {
-    # TARGET_WIDTH: We resize every image to 800px wide.
-    # This ensures a 4K image and a 720p image are processed the same way.
     'TARGET_WIDTH': 800,
 
-    # Color Detection (HSV) - To FIND the Red Box
     'RED_LOWER_1': np.array([0, 70, 50]),
     'RED_UPPER_1': np.array([10, 255, 255]),
     'RED_LOWER_2': np.array([170, 70, 50]),
     'RED_UPPER_2': np.array([180, 255, 255]),
 
-    # Filtering
     'BLUR_KERNEL': (5, 5),
     'MORPH_KERNEL': (3, 3),
     'MIN_AREA': 1500,
     'ASPECT_RATIO_MIN': 0.75,
     'ASPECT_RATIO_MAX': 1.25,
 
-    # Logic (YOUR CHANGES):
-    # 0.55: The center strip must be 55% white to be "Restricted".
-    # 0.10: We only analyze the middle 10% of the sign's height.
     'WHITE_BAR_THRESHOLD': 0.55,
     'CENTER_STRIP_HEIGHT': 0.10,
 }
-
-
-# ==========================================
-#            HELPER FUNCTIONS
-# ==========================================
 
 def normalize_image(image, target_width):
     h, w = image.shape[:2]
@@ -58,10 +43,6 @@ def draw_dashed_horizontal_line(img, x_start, x_end, y, color, thickness=2, dash
         cv2.line(img, (x, y), (min(x + dash_len, x_end), y), color, thickness)
 
 
-# ==========================================
-#              MAIN LOGIC
-# ==========================================
-
 def detect_signs_with_masks(input_folder):
     if not os.path.exists(input_folder):
         print(f"Error: Directory '{input_folder}' not found.")
@@ -81,15 +62,12 @@ def detect_signs_with_masks(input_folder):
 
         start_time = time.perf_counter()
 
-        # 1. Normalize
         image = normalize_image(original_image, CONFIG['TARGET_WIDTH'])
         display_img = image.copy()
 
-        # 2. Pre-processing
         blurred = cv2.GaussianBlur(image, CONFIG['BLUR_KERNEL'], 0)
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
-        # 3. Red Mask
         mask1 = cv2.inRange(hsv, CONFIG['RED_LOWER_1'], CONFIG['RED_UPPER_1'])
         mask2 = cv2.inRange(hsv, CONFIG['RED_LOWER_2'], CONFIG['RED_UPPER_2'])
         mask_red_raw = mask1 + mask2
@@ -110,19 +88,15 @@ def detect_signs_with_masks(input_folder):
 
                 if CONFIG['ASPECT_RATIO_MIN'] <= aspect_ratio <= CONFIG['ASPECT_RATIO_MAX']:
 
-                    # Capture the ROIs
                     roi_color = image[y:y + h, x:x + w]
                     roi_red_mask = mask_red[y:y + h, x:x + w]
 
-                    # --- WHITE DETECTION LOGIC (CLAHE + OTSU) ---
                     roi_gray = cv2.cvtColor(roi_color, cv2.COLOR_BGR2GRAY)
 
-                    # CLAHE (Contrast Limited Adaptive Histogram Equalization)
                     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                     roi_enhanced = clahe.apply(roi_gray)
                     _, mask_white_roi = cv2.threshold(roi_enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-                    # Logic Calculation
                     h_roi = mask_white_roi.shape[0]
                     margin = (1.0 - CONFIG['CENTER_STRIP_HEIGHT']) / 2
                     local_y_start = int(h_roi * margin)
@@ -157,7 +131,6 @@ def detect_signs_with_masks(input_folder):
                         'vis_white': mask_white_roi
                     })
 
-        # Filter Nested Boxes
         candidates.sort(key=lambda x: x['area'], reverse=True)
         final_detections = []
         processed_indices = set()
@@ -170,26 +143,21 @@ def detect_signs_with_masks(input_folder):
                 if is_box_inside(candidates[j]['box'], outer['box']):
                     processed_indices.add(j)
 
-        # Draw & Display
         print(f"IMAGE: {img_name}")
 
-        # --- MASK DEBUG VISUALIZATION (FIXED WITH PADDING) ---
         if final_detections:
             debug_views = []
             fixed_height = 200
 
-            # 1. Generate individual debug strips
             for det in final_detections:
                 orig = det['vis_orig']
 
-                # Convert Masks to Color for Stacking
                 red_vis = cv2.cvtColor(det['vis_red'], cv2.COLOR_GRAY2BGR)
                 red_vis[:, :, 0] = 0  # Remove Blue
                 red_vis[:, :, 1] = 0  # Remove Green
 
                 white_vis = cv2.cvtColor(det['vis_white'], cv2.COLOR_GRAY2BGR)
 
-                # Resize to fixed height, keeping aspect ratio
                 scale = fixed_height / orig.shape[0]
                 new_w = int(orig.shape[1] * scale)
 
@@ -197,7 +165,6 @@ def detect_signs_with_masks(input_folder):
                 v2 = cv2.resize(red_vis, (new_w, fixed_height))
                 v3 = cv2.resize(white_vis, (new_w, fixed_height))
 
-                # Borders
                 cv2.rectangle(v1, (0, 0), (new_w - 1, fixed_height - 1), det['color'], 2)
                 cv2.rectangle(v2, (0, 0), (new_w - 1, fixed_height - 1), (0, 0, 255), 2)
                 cv2.rectangle(v3, (0, 0), (new_w - 1, fixed_height - 1), (255, 255, 255), 2)
@@ -205,7 +172,7 @@ def detect_signs_with_masks(input_folder):
                 combined = np.hstack([v1, v2, v3])
                 debug_views.append(combined)
 
-            # 2. Pad widths to match the widest row
+            # Pad widths to match the widest row
             if debug_views:
                 max_width = max(view.shape[1] for view in debug_views)
                 padded_views = []
@@ -222,7 +189,6 @@ def detect_signs_with_masks(input_folder):
             empty = np.zeros((100, 300, 3), dtype=np.uint8)
             cv2.putText(empty, "No Detection", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # Draw on Main Image
         for det in final_detections:
             x, y, w, h = det['box']
             label = det['label']
